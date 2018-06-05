@@ -207,16 +207,54 @@ class MyGit(object):
 	        objects.update(self.find_commit_objects(parent))
 	    return objects
 
-	def find_missing_objects(local_sha1, remote_sha1):
+	def find_missing_objects(self, local_sha1, remote_sha1):
 	    """Return set of SHA-1 hashes of objects in local commit that are
 	    missing at the remote (based on the given remote commit hash).
 	    """
-	    local_objects = find_commit_objects(local_sha1)
+	    local_objects = self.find_commit_objects(local_sha1)
 	    if remote_sha1 is None:
 	        return local_objects
-	    remote_objects = find_commit_objects(remote_sha1)
+	    remote_objects = self.find_commit_objects(remote_sha1)
 	    return local_objects - remote_objects
 
+	def encode_pack_object(self, obj):
+	    """Encode a single object for a pack file and return bytes
+	    (variable-length header followed by compressed data bytes).
+	    """
+	    obj_type, data = self.read_object(obj)
+	    type_num = ObjectType[obj_type].value
+	    size = len(data)
+	    byte = (type_num << 4) | (size & 0x0f)
+	    size >>= 4
+	    header = []
+	    while size:
+	        header.append(byte | 0x80)
+	        byte = size & 0x7f
+	        size >>= 7
+	    header.append(byte)
+	    return bytes(header) + zlib.compress(data)
 
+	def create_pack(self, objects):
+	    """Create pack file containing all objects in given given set of
+	    SHA-1 hashes, return data bytes of full pack file.
+	    """
+	    header = struct.pack('!4sLL', b'PACK', 2, len(objects))
+	    body = b''.join(self.encode_pack_object(o) for o in sorted(objects))
+	    contents = header + body
+	    sha1 = hashlib.sha1(contents).digest()
+	    data = contents + sha1
+	    return data
 
-
+	def push(self, git_url, username, password):
+	    """Push master branch to given git repo URL."""
+	    remote_sha1 = self.get_remote_master_hash(git_url, username, password)
+	    local_sha1 = self.get_local_master_hash()
+	    missing = self.find_missing_objects(local_sha1, remote_sha1)
+	    lines = ['{} {} refs/heads/master\x00 report-status'.format(
+	            remote_sha1 or ('0' * 40), local_sha1).encode()]
+	    data = self.build_lines_data(lines) + self.create_pack(missing)
+	    url = git_url + '/git-receive-pack'
+	    response = self.http_request(url, username, password, data=data)
+	    lines = self.extract_lines(response)
+	    assert lines[0] == b'unpack ok\n', \
+	        "expected line 1 b'unpack ok', got: {}".format(lines[0])
