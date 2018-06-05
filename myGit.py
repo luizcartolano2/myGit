@@ -95,20 +95,20 @@ class MyGit(object):
 	def write_tree(self):
 		"""Write a tree object from the current index entries."""
 		tree_entries = []
-		for entry in read_index():
+		for entry in self.read_index():
 			assert '/' not in entry.path, \
 			    'currently only supports a single, top-level directory'
 			mode_path = '{:o} {}'.format(entry.mode, entry.path).encode()
 			tree_entry = mode_path + b'\x00' + entry.sha1
 			tree_entries.append(tree_entry)
-		return hash_object(b''.join(tree_entries), 'tree')
+		return self.hash_object(b''.join(tree_entries), 'tree')
 
 	def commit(self, message, author):
 		"""Commit the current state of the index to master with given message.
 		Return hash of commit object.
 		"""
-		tree = write_tree()
-		parent = get_local_master_hash()
+		tree = self.write_tree()
+		parent = self.get_local_master_hash()
 		timestamp = int(time.mktime(time.localtime()))
 		utc_offset = -time.timezone
 		author_time = '{} {}{:02}{:02}'.format(
@@ -125,9 +125,9 @@ class MyGit(object):
 		lines.append(message)
 		lines.append('')
 		data = '\n'.join(lines).encode()
-		sha1 = hash_object(data, 'commit')
+		sha1 = self.hash_object(data, 'commit')
 		master_path = os.path.join('.git', 'refs', 'heads', 'master')
-		write_file(master_path, (sha1 + '\n').encode())
+		self.write_file(master_path, (sha1 + '\n').encode())
 		print('committed to master: {:7}'.format(sha1))
 		return sha1
 		
@@ -168,7 +168,7 @@ class MyGit(object):
 	    None if no remote commits.
 	    """
 	    url = git_url + '/info/refs?service=git-receive-pack'
-	    response = http_request(url, username, password)
+	    response = self.http_request(url, username, password)
 	    lines = extract_lines(response)
 	    assert lines[0] == b'# service=git-receive-pack\n'
 	    assert lines[1] == b''
@@ -179,9 +179,43 @@ class MyGit(object):
 	    assert len(master_sha1) == 40
 	    return master_sha1.decode()
 
+	def find_tree_objects(self, tree_sha1):
+	    """Return set of SHA-1 hashes of all objects in this tree
+	    (recursively), including the hash of the tree itself.
+	    """
+	    objects = {tree_sha1}
+	    for mode, path, sha1 in self.read_tree(sha1=tree_sha1):
+	        if stat.S_ISDIR(mode):
+	            objects.update(self.find_tree_objects(sha1))
+	        else:
+	            objects.add(sha1)
+	    return objects
 
+	def find_commit_objects(self, commit_sha1):
+	    """Return set of SHA-1 hashes of all objects in this commit
+	    (recursively), its tree, its parents, and the hash of the commit
+	    itself.
+	    """
+	    objects = {commit_sha1}
+	    obj_type, commit = self.read_object(commit_sha1)
+	    assert obj_type == 'commit'
+	    lines = commit.decode().splitlines()
+	    tree = next(l[5:45] for l in lines if l.startswith('tree '))
+	    objects.update(self.find_tree_objects(tree))
+	    parents = (l[7:47] for l in lines if l.startswith('parent '))
+	    for parent in parents:
+	        objects.update(self.find_commit_objects(parent))
+	    return objects
 
-
+	def find_missing_objects(local_sha1, remote_sha1):
+	    """Return set of SHA-1 hashes of objects in local commit that are
+	    missing at the remote (based on the given remote commit hash).
+	    """
+	    local_objects = find_commit_objects(local_sha1)
+	    if remote_sha1 is None:
+	        return local_objects
+	    remote_objects = find_commit_objects(remote_sha1)
+	    return local_objects - remote_objects
 
 
 
