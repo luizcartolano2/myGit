@@ -103,7 +103,7 @@ class MyGit(object):
 			tree_entries.append(tree_entry)
 		return hash_object(b''.join(tree_entries), 'tree')
 
-	def commit(message, author):
+	def commit(self, message, author):
 		"""Commit the current state of the index to master with given message.
 		Return hash of commit object.
 		"""
@@ -132,10 +132,52 @@ class MyGit(object):
 		return sha1
 		
 
+	def extract_lines(self, data):
+	    """Extract list of lines from given server data."""
+	    lines = []
+	    i = 0
+	    for _ in range(1000):
+	        line_length = int(data[i:i + 4], 16)
+	        line = data[i + 4:i + line_length]
+	        lines.append(line)
+	        if line_length == 0:
+	            i += 4
+	        else:
+	            i += line_length
+	        if i >= len(data):
+	            break
+	    return lines
 
+	def build_lines_data(self, lines):
+	    """Build byte string from given lines to send to server."""
+	    result = []
+	    for line in lines:
+	        result.append('{:04x}'.format(len(line) + 5).encode())
+	        result.append(line)
+	        result.append(b'\n')
+	    result.append(b'0000')
+	    return b''.join(result)
 
+	def http_request(self, url, username, password):
+	    response = requests.get(url, auth=(username, password))
+	    response.raise_for_status()
+	    return response.content	 
 
-
+	def get_remote_master_hash(self, git_url, username, password):
+	    """Get commit hash of remote master branch, return SHA-1 hex string or
+	    None if no remote commits.
+	    """
+	    url = git_url + '/info/refs?service=git-receive-pack'
+	    response = http_request(url, username, password)
+	    lines = extract_lines(response)
+	    assert lines[0] == b'# service=git-receive-pack\n'
+	    assert lines[1] == b''
+	    if lines[2][:40] == b'0' * 40:
+	        return None
+	    master_sha1, master_ref = lines[2].split(b'\x00')[0].split()
+	    assert master_ref == b'refs/heads/master'
+	    assert len(master_sha1) == 40
+	    return master_sha1.decode()
 
 
 
