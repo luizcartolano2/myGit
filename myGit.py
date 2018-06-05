@@ -92,7 +92,44 @@ class MyGit(object):
 		assert len(entries) == num_entries
 		return entries
 
+	def write_tree(self):
+		"""Write a tree object from the current index entries."""
+		tree_entries = []
+		for entry in read_index():
+			assert '/' not in entry.path, \
+			    'currently only supports a single, top-level directory'
+			mode_path = '{:o} {}'.format(entry.mode, entry.path).encode()
+			tree_entry = mode_path + b'\x00' + entry.sha1
+			tree_entries.append(tree_entry)
+		return hash_object(b''.join(tree_entries), 'tree')
 
+	def commit(message, author):
+		"""Commit the current state of the index to master with given message.
+		Return hash of commit object.
+		"""
+		tree = write_tree()
+		parent = get_local_master_hash()
+		timestamp = int(time.mktime(time.localtime()))
+		utc_offset = -time.timezone
+		author_time = '{} {}{:02}{:02}'.format(
+			timestamp,
+			'+' if utc_offset > 0 else '-',
+			abs(utc_offset) // 3600,
+			(abs(utc_offset) // 60) % 60)
+		lines = ['tree ' + tree]
+		if parent:
+			lines.append('parent ' + parent)
+		lines.append('author {} {}'.format(author, author_time))
+		lines.append('committer {} {}'.format(author, author_time))
+		lines.append('')
+		lines.append(message)
+		lines.append('')
+		data = '\n'.join(lines).encode()
+		sha1 = hash_object(data, 'commit')
+		master_path = os.path.join('.git', 'refs', 'heads', 'master')
+		write_file(master_path, (sha1 + '\n').encode())
+		print('committed to master: {:7}'.format(sha1))
+		return sha1
 		
 
 
